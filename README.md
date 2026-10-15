@@ -1,4 +1,4 @@
-# Pre-Generation Circuit Breaker
+# MindBrake, A Pre-Generation Circuit Breaker in experiment 
 ### Can a small LLM detect when it's about to guess — before it says a word?
 
 **What if we could check whether an LLM has the information it needs before letting it answer?**
