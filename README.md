@@ -1,4 +1,4 @@
-# MindBrake, A Pre-Generation Circuit Breaker in experiment 
+# M.U.T.E - Middle-layer Uncertainty Threshold Engine
 ### Can a small LLM detect when it's about to guess — before it says a word?
 
 **What if we could check whether an LLM has the information it needs before letting it answer?**
