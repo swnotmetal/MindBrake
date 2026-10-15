@@ -1,42 +1,178 @@
-# Pre-Generation Circuit Breaker: Stopping LLM Hallucinations via Mid-Layer Linear Probes
+# Pre-Generation Circuit Breaker
+### Can a small LLM detect when it's about to guess — before it says a word?
 
-> **TL;DR:** Small language models love to guess when a requested piece of information is missing from the prompt. Instead of relying on prompt engineering or running a second "LLM-as-a-Judge" model after the fact, this repo explores a simpler idea: reading the model's mid-layer hidden states at the very end of the prefill stage, right before it generates a single token. Using a lightweight logistic regression probe (under 10 KB) on `Qwen/Qwen3.5-0.8B`, we can detect missing context in less than 0.1ms of probe overhead and physically cut off `model.generate()` to return `None`.
+**What if we could check whether an LLM has the information it needs before letting it answer?**
 
----
+Small language models can confidently produce a price, date, or order number that was never actually provided. Telling them *"don't make things up"* is not a particularly robust security strategy.
 
-## Why This Exists
+This project explores a different approach: inspect a language model's internal representations before text generation begins, use a lightweight linear probe to estimate missing-context risk, and stop decoding when that risk crosses a configurable threshold.
 
-When building deterministic data-extraction pipelines (like parsing order emails, invoices, or ERP tickets) with small local models (`0.5B` to `4B`), the biggest headache isn't general world knowledge—it is **context faithfulness**. 
+Think of it as a tiny bouncer at the door of token generation.
 
-If you ask a small model, *"What is the total amount charged?"* and the email doesn't actually contain a price, the softmax layer still forces the model to pick the next most likely token. It will happily grab a street number, an order ID, or a historical price from last year and present it as the answer.
+**No second LLM judge. No fine-tuning of the base model. Just hidden-state analysis, a linear probe, and a threshold-based circuit breaker.**
 
-Standard fixes have annoying trade-offs:
-* **Prompt engineering** ("If you don't know, say NULL") is brittle on sub-1B models.
-* **External guardrails / LLM-as-a-Judge** require waiting for the model to finish hallucinating tokens, and then paying the latency and compute cost of a second forward pass to catch the lie.
+> **Status:** Experimental proof of concept. Results are preliminary and task-specific; this is not a general-purpose hallucination detector.
 
-**The question behind this experiment:** Since a Transformer's self-attention heads already cross-reference the question against the context during the initial prefill pass, does the model internally "know" that the target entity is missing before it opens its mouth? If so, can we just read that internal state and pull the plug early?
+## The Idea in 30 Seconds
 
----
+Imagine an email says:
 
-## How It Works (Read-Only Probing + Hard Cutoff)
+> Order #1500 confirmed. Delivery address: 12 Example Street.
 
-We don't fine-tune the LLM, and we don't inject steering vectors into the residual stream (which can easily destabilize syntax in small models). We treat the LLM's prefill stage as a feature extractor and put a hard circuit breaker in front of the decoding loop:
+You are asked to extract the total price. The email never mentions one.
+
+A language model may still produce a plausible-looking number. The problem is not whether the number looks reasonable — it's whether the source actually supports it.
+
+This experiment asks whether a small classifier can identify signals associated with missing information inside the model's intermediate representations, before the model starts generating an answer.
+
+- **Information missing?** The probe may flag elevated risk and trigger abstention.
+- **Information supplied?** The probe may assign a lower risk score and allow normal generation.
+
+The intended behavior is simple: when the model lacks the requested information, prefer an explicit abstention over an unsupported guess.
+
+*Illustrative example: actual detection performance depends on the input, threshold, and generalization of the trained probe.*
+
+## How It Works
+
+The circuit breaker has three main stages:
+
+1. **Read the input.** The LLM processes the prompt during its prefill pass.
+2. **Inspect its internal representation.** A linear probe reads a hidden-state vector from a selected Transformer layer and estimates whether the input resembles missing-context cases in its training data.
+3. **Decide whether to proceed.** If the score crosses a configured threshold, the generation pipeline can abstain before producing answer tokens. Otherwise, normal generation proceeds.
+
+The base model remains frozen. The probe is trained separately as a lightweight classifier.
+
+### Architecture
 
 ```text
-[Input: Order Email + Extraction Question]
-                    |
-                    v
-     [LLM Prefill Pass (No Decoding)]
-                    |
-                    +---> (Tap Layer 15 Hidden State at Last Token: R^1024)
-                                           |
-                                           v
-                          [Linear Probe: Risk = Sigmoid(W * h + b)]
-                                           |
-                        +------------------+------------------+
-                        |                                     |
-                 Risk < Threshold                      Risk >= Threshold
-               (Target Span Found)                   (Target Span Missing)
-                        |                                     |
-                        v                                     v
-           [Run model.generate()]              [Abort Decoding -> Return None]
+Input prompt
+     |
+     v
+LLM prefill pass
+     |
+     v
+Selected intermediate hidden state
+     |
+     v
+Trained linear probe
+     |
+     v
+Risk score
+     |
+     +---- Above threshold ----> Abort decoding / abstain
+     |
+     +---- Below threshold ---> Continue normal generation
+```
+
+**Important distinction:** Extracting an intermediate hidden state does not automatically stop the model from computing later layers. Genuine early-exit inference requires an implementation that actually skips those layers.
+
+## Experimental Setup
+
+| Component | Details |
+|---|---|
+| Base model | `Qwen/Qwen3.5-0.8B` |
+| Detection method | Linear probe using logistic regression |
+| Target task | Detecting missing-context risks in structured information extraction |
+| Evaluation | Five-fold cross-validation |
+| Layer analysis | Embedding output and 24 Transformer blocks |
+| Decision mechanism | Configurable score threshold |
+| Base-model fine-tuning | None |
+
+The initial experiment trained a probe on 20 constructed examples. A subsequent experiment expanded the dataset to 40 examples and evaluated probes across all 25 hidden-state indices.
+
+## Results So Far
+
+### 1. Layer-wise probe accuracy
+
+The layer sweep found that multiple intermediate layers achieved 100% five-fold cross-validation accuracy on the current experimental dataset. Layer 23 was selected as the best-performing layer by the experiment's selection logic.
+
+The initial runtime demonstration uses a Layer 15 probe. These are separate experimental configurations, not contradictory claims: the initial demonstration and the later layer sweep serve different purposes.
+
+**What this suggests:** Information useful for this particular classification task may be linearly accessible in intermediate model representations.
+
+**What it does not establish:** That the probe can detect hallucinations reliably across arbitrary prompts, domains, or models.
+
+> A perfect score on a small dataset is a reason to investigate further, not a reason to stop testing.
+
+### 2. Counterfactual tests
+
+The notebook also tests what happens when missing information is added back into selected inputs.
+
+| Test case | Missing-information score | After adding the fact |
+|---|---:|---:|
+| Renewal price | 0.879 | 0.009 |
+| Revised quote total | 0.973 | 0.010 |
+| Quoted price | 0.820 | 0.002 |
+
+These examples show a substantial score reduction after the relevant information is supplied.
+
+This is encouraging because it suggests the probe may be responding to changes in the input rather than simply assigning every example a fixed risk score.
+
+However, these are a small number of constructed counterfactual pairs. Further tests are needed to rule out sensitivity to wording, templates, distractor numbers, and other surface-level features.
+
+**Interpret the scores carefully:** They are outputs of the trained classifier, not automatically calibrated probabilities of real-world hallucination.
+
+## Why This Approach?
+
+Conventional approaches to reducing hallucinations include prompt engineering, retrieval-augmented generation (RAG), output validation, and separate model-based judges.
+
+This experiment investigates a complementary option: using information already present in the model's internal representations to make an additional pre-generation decision.
+
+Potential advantages worth investigating:
+
+- **No second LLM judge:** The classifier itself is lightweight.
+- **No base-model fine-tuning:** The original model weights remain unchanged.
+- **Potentially low additional overhead:** Linear classification is inexpensive compared with another full model invocation, although the full pipeline must still be benchmarked.
+- **A natural abstention mechanism:** The system can decline to answer when the probe detects elevated missing-context risk.
+
+These are potential engineering advantages, not yet demonstrated end-to-end performance guarantees.
+
+## What This Project Does Not Claim
+
+This is an experimental missing-context detector, not a universal truth detector.
+
+- It does not detect every kind of hallucination.
+- It does not prove that a proposed answer is factually correct.
+- It does not establish generalization from 40 constructed examples to real-world workloads.
+- It does not yet demonstrate a 60% reduction in end-to-end inference compute.
+- It does not establish that Layer 23 is universally optimal.
+- It does not guarantee that every risky generation will be blocked.
+
+A probe can only learn patterns represented in its training data. If the real-world failure differs from those patterns, the detector may miss it.
+
+## Reproducing the Experiment
+
+The notebook contains the experimental workflow, including data construction, hidden-state extraction, probe training, layer-wise evaluation, and counterfactual tests.
+
+**Notebook:** [Open the experiment in GitHub](./Small_language_Model_Qwen_3_5_0_k_hallucination_probe_experiment_.ipynb)
+
+To reproduce the results:
+
+1. Open the notebook in an environment that supports the required Python dependencies and model download.
+2. Run the cells in order.
+3. Review the sample construction and label definitions before interpreting accuracy.
+4. Inspect the cross-validation results and selected layer.
+5. Run the counterfactual examples and verify the risk-score changes.
+
+Exact dependencies, hardware requirements, and execution times should be documented alongside a tested environment configuration.
+
+## Limitations and Next Steps
+
+The next stage is to determine whether the observed signal generalizes beyond the constructed examples.
+
+1. **Larger, independent evaluation:** Test on more examples with facts grouped to prevent near-duplicate leakage across folds.
+2. **Robustness testing:** Vary wording, entity names, distractor numbers, dates, and source attribution.
+3. **Better metrics:** Report precision, recall, false-positive rate, and threshold sensitivity, alongside accuracy.
+4. **Baseline comparisons:** Compare against simple text-based classifiers and relevant abstention or verification methods.
+5. **Actual early-exit inference:** Implement a forward pass that stops at the selected layer, then benchmark end-to-end latency, throughput, and memory.
+6. **Broader task evaluation:** Investigate whether the approach extends to RAG evidence sufficiency or other narrowly defined reliability tasks.
+
+## Final Thought
+
+LLMs are very good at producing answers. Knowing when not to answer is a different problem.
+
+This project explores whether a small, inexpensive classifier can help make that distinction before generation begins.
+
+It is an early experiment, not a finished safety solution — and the next challenge is to find out where the idea holds up when the data gets harder.
+
+**Contributions, criticism, and reproducible counterexamples are welcome.**
