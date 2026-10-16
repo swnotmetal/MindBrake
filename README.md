@@ -13,6 +13,8 @@ Think of it as a tiny bouncer at the door of token generation.
 
 > **Status:** Experimental proof of concept. Results are preliminary and task-specific; this is not a general-purpose hallucination detector.
 
+**Headline result:** on expert-labeled commercial contracts (CUAD), the probe separates "answer is present" from "answer is missing" with **AUROC 0.95** — the first time the signal survives real-world, gold-labeled text.
+
 ## The Idea in 30 Seconds
 
 Imagine an email says:
@@ -112,6 +114,27 @@ However, these are a small number of constructed counterfactual pairs. Further t
 
 **Interpret the scores carefully:** They are outputs of the trained classifier, not automatically calibrated probabilities of real-world hallucination.
 
+### 3. Real-world benchmark: CUAD commercial contracts
+
+The constructed emails are a nice warm-up, but the real test is whether the signal survives real-world text. The notebook now runs the probe against [**CUAD**](https://www.atticusprojectai.org/cuad) — 510 expert-labeled commercial contracts with human-annotated answers — using 300 questions: 150 where the answer is present, 150 where it is genuinely absent.
+
+| Metric | Value |
+|---|---:|
+| Blind-test AUROC | **0.950** (95% CI 0.882–0.993) |
+| Blind-test AUPRC | **0.940** (chance ≈ 0.52) |
+| Selected layer | 14 (chosen on the train split only) |
+
+And the part that actually matters for a circuit breaker — what you get when the threshold is set by an acceptable false-block budget:
+
+| Allowed false-block rate | Missing-answer caught | Precision |
+|---|---:|---:|
+| ≤10% | 71% | 96% |
+| ≤20% | 81% | 89% |
+
+So: at a threshold that blocks at most ~10% of normal questions, the probe catches ~7 out of 10 "this information isn't in the text" cases. That's the difference between a bouncer who occasionally dozes off and one who actually checks the guest list.
+
+**Caveat, because honesty beats hype:** these are *gold-labeled* contracts, so there's no auto-labeling noise inflating the number. But it's "missing-context detection on one domain," not "hallucination detection everywhere." One domain, one model, one probe.
+
 ## Why This Approach?
 
 Conventional approaches to reducing hallucinations include prompt engineering, retrieval-augmented generation (RAG), output validation, and separate model-based judges.
@@ -133,7 +156,7 @@ This is an experimental missing-context detector, not a universal truth detector
 
 - It does not detect every kind of hallucination.
 - It does not prove that a proposed answer is factually correct.
-- It does not establish generalization from 40 constructed examples to real-world workloads.
+- It shows a signal on one gold-labeled domain (commercial contracts), not generalization to arbitrary real-world workloads.
 - It does not yet demonstrate a 60% reduction in end-to-end inference compute.
 - It does not establish that Layer 23 is universally optimal.
 - It does not guarantee that every risky generation will be blocked.
@@ -154,13 +177,13 @@ To reproduce the results:
 4. Inspect the cross-validation results and selected layer.
 5. Run the counterfactual examples and verify the risk-score changes.
 
-Exact dependencies, hardware requirements, and execution times should be documented alongside a tested environment configuration.
+Exact dependencies are pinned in [`requirements.txt`](./requirements.txt); hardware requirements and execution times are noted in the notebook.
 
 ## Limitations and Next Steps
 
 The next stage is to determine whether the observed signal generalizes beyond the constructed examples.
 
-1. **Larger, independent evaluation:** Test on more examples with facts grouped to prevent near-duplicate leakage across folds.
+1. **Wider evaluation:** CUAD is one domain; test across more document types (emails, tickets, RAG evidence) to see where the signal holds — and where it quietly gives up.
 2. **Robustness testing:** Vary wording, entity names, distractor numbers, dates, and source attribution.
 3. **Better metrics:** Report precision, recall, false-positive rate, and threshold sensitivity, alongside accuracy.
 4. **Baseline comparisons:** Compare against simple text-based classifiers and relevant abstention or verification methods.

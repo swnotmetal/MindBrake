@@ -1,0 +1,17 @@
+# Local environment for the Qwen3.5-0.8B hallucination-probe notebook
+# Python 3.12 (conda env `torch_gpu`)
+#
+# IMPORTANT: install PyTorch from the CUDA 13.0 index, otherwise the RTX 5050
+# (Blackwell, sm_120) gets "no kernel image is available for execution".
+#   python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+torch==2.14.1
+torchvision==0.29.1
+torchaudio==2.11.0
+transformers==5.20.0
+accelerate
+scikit-learn
+matplotlib
+numpy
+pillow
+safetensors
+ipykernel

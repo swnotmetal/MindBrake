@@ -1,0 +1,15 @@
+# Local / editor config
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace cache (never commit downloaded models/datasets)
+.cache/
