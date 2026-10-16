@@ -135,6 +135,10 @@ So: at a threshold that blocks at most ~10% of normal questions, the probe catch
 
 **Caveat, because honesty beats hype:** these are *gold-labeled* contracts, so there's no auto-labeling noise inflating the number. But it's "missing-context detection on one domain," not "hallucination detection everywhere." One domain, one model, one probe.
 
+**Position-shortcut check:** because answerable windows center the answer while unanswerable ones are arbitrary slices, a probe could cheat by learning "the relevant text sits in the middle." Randomizing the answer's position inside the window gives **AUROC 0.935 / AUPRC 0.910** — essentially unchanged from 0.950 / 0.940 — so the signal is about *presence*, not position.
+
+![CUAD confound check — ROC and PR curves with the answer position randomized](cuad_confound_check.png)
+
 ## Why This Approach?
 
 Conventional approaches to reducing hallucinations include prompt engineering, retrieval-augmented generation (RAG), output validation, and separate model-based judges.
