@@ -13,3 +13,6 @@ env/
 
 # HuggingFace cache (never commit downloaded models/datasets)
 .cache/
+
+# Runtime audit log (accumulates escalations over time)
+escalations.jsonl
