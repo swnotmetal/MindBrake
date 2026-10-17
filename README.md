@@ -9,11 +9,7 @@ This project explores a different approach: inspect a language model's internal 
 
 Think of it as a tiny bouncer at the door of token generation.
 
-**No second LLM judge. No fine-tuning of the base model. Just hidden-state analysis, a linear probe, and a threshold-based circuit breaker.**
-
 > **Status:** Experimental proof of concept. Results are preliminary and task-specific; this is not a general-purpose hallucination detector.
-
-**Headline result:** on expert-labeled commercial contracts (CUAD), the probe separates "answer is present" from "answer is missing" with **AUROC 0.95** — the first time the signal survives real-world, gold-labeled text.
 
 ## The Idea in 30 Seconds
 
@@ -133,7 +129,7 @@ And the part that actually matters for a circuit breaker — what you get when t
 
 So: at a threshold that blocks at most ~10% of normal questions, the probe catches ~7 out of 10 "this information isn't in the text" cases. That's the difference between a bouncer who occasionally dozes off and one who actually checks the guest list.
 
-**Caveat, because honesty beats hype:** these are *gold-labeled* contracts, so there's no auto-labeling noise inflating the number. But it's "missing-context detection on one domain," not "hallucination detection everywhere." One domain, one model, one probe.
+**Caveat:** these are *gold-labeled* contracts, so no auto-labeling noise inflates the number.
 
 **Position-shortcut check:** because answerable windows center the answer while unanswerable ones are arbitrary slices, a probe could cheat by learning "the relevant text sits in the middle." Randomizing the answer's position inside the window gives **AUROC 0.935 / AUPRC 0.910** — essentially unchanged from 0.950 / 0.940 — so the signal is about *presence*, not position.
 
@@ -161,7 +157,6 @@ This is an experimental missing-context detector, not a universal truth detector
 - It does not detect every kind of hallucination.
 - It does not prove that a proposed answer is factually correct.
 - It shows a signal on one gold-labeled domain (commercial contracts), not generalization to arbitrary real-world workloads.
-- It does not yet demonstrate a 60% reduction in end-to-end inference compute.
 - It does not establish that Layer 23 is universally optimal.
 - It does not guarantee that every risky generation will be blocked.
 
