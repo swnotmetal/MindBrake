@@ -132,14 +132,36 @@ def load_threshold(path: str, default: float = 0.60) -> float:
 # Escalation + retry handlers (the "actions" behind the policy)
 # --------------------------------------------------------------------------- #
 
+class EscalationSink:
+    """Route escalated refusals to a target: a JSONL file (default) or a callback.
+
+    Examples:
+        sink = EscalationSink()                            # -> escalations.jsonl
+        sink = EscalationSink(path="review.jsonl")         # -> custom file
+        sink = EscalationSink(send=lambda r: post(r))      # -> custom target (queue/API)
+    """
+
+    def __init__(self, path: str = "escalations.jsonl",
+                 send: Optional[Callable[[dict], None]] = None):
+        self.path = path
+        self._send = send
+
+    def submit(self, result: Result, context: Optional[str] = None,
+               question: Optional[str] = None) -> dict:
+        record = {"status": result.status, "reason": result.reason, "raw": result.raw,
+                  "context": context, "question": question}
+        if self._send is not None:
+            self._send(record)
+        else:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return record
+
+
 def escalate(result: Result, path: str = "escalations.jsonl",
              context: Optional[str] = None, question: Optional[str] = None) -> dict:
-    """Persist a refusal for human review as one JSONL line (audit trail)."""
-    record = {"status": result.status, "reason": result.reason, "raw": result.raw,
-              "context": context, "question": question}
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    return record
+    """Convenience wrapper over EscalationSink (default JSONL audit trail)."""
+    return EscalationSink(path=path).submit(result, context, question)
 
 
 def retry(field: FieldSchema, context: str, risk: float,
@@ -184,6 +206,11 @@ def _demo() -> None:
 
     # escalation sink (audit trail)
     print("escalated:", escalate(r3, path=os.path.join(tmp, "mute_esc_demo.jsonl"), context="demo"))
+
+    # pluggable escalation: inject a callback instead of writing a file
+    captured = []
+    EscalationSink(send=captured.append).submit(r3, context="demo")
+    print("escalation callback captured:", captured)
 
     # retry: a provider that fails once (None) then succeeds
     state = {"n": 0}
